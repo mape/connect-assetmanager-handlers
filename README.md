@@ -1,6 +1,6 @@
 # connect-assetmanager-handlers
 
-Post and pre hooks for connect-assetmanager
+Post and pre hooks for [connect-assetmanager](http://github.com/mape/connect-assetmanager)
 
 ## Installation
 
@@ -24,7 +24,7 @@ Via [npm](http://github.com/isaacs/npm):
                     assetHandler.yuiCssOptimize
                     , assetHandler.fixVendorPrefixes
                     , assetHandler.fixGradients
-                    , assetHandler.replaceImageRefToBase64(__dirname + '/../public')
+                    , assetHandler.replaceImageRefToBase64(root)
                 ]
             }
         }

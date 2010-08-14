@@ -51,15 +51,16 @@ Turns into:
 ### fixGradients
 Enables easy use of top to bottom gradients cross browser.
 
-#### Example
-    gradient:rgba(10,10,10,0.5)_rgba(10,10,10,0.2);
+#### Example
+    gradient: rgba(255,255,255,1)_rgba(255,255,255,0.6);
 
 Turns into:
 
-    background-image: -webkit-gradient(linear,0% 0,0% 100%,from(rgba(10,10,10,0.5)),to(rgba(10,10,10,0.2)));
-    background-image: -moz-linear-gradient(top,rgba(10,10,10,0.5),rgba(10,10,10,0.2));
-    filter: progid:DXImageTransform.Microsoft.gradient(startColorStr='#7faaa',EndColorStr='#33aaa');
-    -ms-filter: "progid:DXImageTransform.Microsoft.gradient(startColorStr='#7faaa', EndColorStr='#33aaa')";
+    background: rgba(255,255,255,1);
+    background: -webkit-gradient(linear,0% 0,0% 100%,from(rgba(255,255,255,1)),to(rgba(255,255,255,0.6)));
+    background: -moz-linear-gradient(top,rgba(255,255,255,1),rgba(255,255,255,0.6));
+    filter: progid:DXImageTransform.Microsoft.gradient(startColorStr='#ffffffff',EndColorStr='#99ffffff');
+    -ms-filter: "progid:DXImageTransform.Microsoft.gradient(startColorStr='#ffffffff', EndColorStr='#99ffffff')";
 
 ### replaceImageRefToBase64
 Looks for data-url(filepath/file.png) in the CSS and replaces those with the contents of the image, base64 encoded.

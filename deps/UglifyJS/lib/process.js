@@ -543,7 +543,7 @@ function ast_mangle(ast, do_toplevel) {
 
 function ast_squeeze(ast, options) {
         options = defaults(options, {
-                make_seqs: false
+                make_seqs: true
         });
 
         var w = ast_walker(), walk = w.walk;
@@ -609,7 +609,7 @@ function ast_squeeze(ast, options) {
                                 ret3.push(cur);
                         }
                 }
-                return ret3;
+                return ret3.map(walk);
         };
 
         function best_of(ast1, ast2) {
@@ -723,6 +723,10 @@ function ast_squeeze(ast, options) {
                 "conditional": function(c, t, e) {
                         if (c[0] == "unary-prefix" && c[1] == "!")
                                 return [ "conditional", walk(c[2]), walk(e), walk(t) ];
+                },
+                "seq": function() {
+                        if (arguments.length == 1)
+                                return walk(arguments[0]);
                 }
         }, function() {
                 return walk(ast);
@@ -952,7 +956,7 @@ function gen_code(ast, beautify) {
                         }) + newline + indent("}");
                 },
                 "regexp": function(rx, mods) {
-                        return "/" + rx.replace(/\x2f/g, "\\x2f") + "/" + mods;
+                        return "/" + rx + "/" + mods;
                 },
                 "array": function(elements) {
                         if (elements.length == 0) return "[]";
@@ -1019,6 +1023,8 @@ function gen_code(ast, beautify) {
                         str.replace(/\x5c/g, "\\\\")
                         .replace(/\r?\n/g, "\\n")
                         .replace(/\t/g, "\\t")
+                        .replace(/\r/g, "\\r")
+                        .replace(/\f/g, "\\f")
                         .replace(/[\b]/g, "\\b")
                         .replace(/\x22/g, "\\\"")
                         + '"';

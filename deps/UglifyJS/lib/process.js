@@ -306,10 +306,9 @@ Scope.prototype = {
                 //    This will get slow.
                 //
                 // 2. doesn't shadow an original name from a parent
-                //    scope, in the event that the parent scope
-                //    doesn't support mangling (uses_eval or
-                //    uses_with) and we reference that name here OR IN
-                //    ANY SUBSCOPES!  Damn!
+                //    scope, in the event that the name is not mangled
+                //    in the parent scope and we reference that name
+                //    here OR IN ANY SUBSCOPES!
                 //
                 // 3. doesn't shadow a name that is referenced but not
                 //    defined (possibly global defined elsewhere).
@@ -323,7 +322,7 @@ Scope.prototype = {
 
                         // case 2.
                         prior = this.has(m);
-                        if (prior && (prior.uses_eval || prior.uses_with) && this.refs[m] === prior)
+                        if (prior && prior !== this && this.refs[m] === prior && !prior.has_mangled(m))
                                 continue;
 
                         // case 3.
@@ -832,10 +831,33 @@ function gen_code(ast, beautify) {
                 return gen;
         };
 
+        function best_of(a) {
+                if (a.length == 1) {
+                        return a[0];
+                }
+                if (a.length == 2) {
+                        var b = a[1];
+                        a = a[0];
+                        return a.length <= b.length ? a : b;
+                }
+                return best_of([ a[0], best_of(a.slice(1)) ]);
+        };
+
         var generators = {
                 "string": make_string,
                 "num": function(num) {
-                        return String(num);
+                        var str = num.toString(10), a = [ str ], m;
+                        if (Math.floor(num) === num) {
+                                a.push("0x" + num.toString(16).toLowerCase(), // probably pointless
+                                       "0" + num.toString(8)); // same.
+                                if ((m = /^(.*?)(0+)$/.exec(num))) {
+                                        a.push(m[1] + "e" + m[2].length);
+                                }
+                        } else if ((m = /^0?\.(0+)(.*)$/.exec(num))) {
+                                a.push(m[2] + "e-" + (m[1].length + 1),
+                                       str.substr(str.indexOf(".")));
+                        }
+                        return best_of(a);
                 },
                 "name": make_name,
                 "toplevel": function(statements) {
@@ -860,7 +882,20 @@ function gen_code(ast, beautify) {
                 },
                 "new": function(ctor, args) {
                         args = args.length > 0 ? "(" + add_commas(args.map(make)) + ")" : "";
-                        return add_spaces([ "new", parenthesize(ctor, "seq", "binary", "conditional", "assign", "dot") + args ]);
+                        return add_spaces([ "new", parenthesize(ctor, "seq", "binary", "conditional", "assign", function(expr){
+                                var w = ast_walker(), has_call = {};
+                                try {
+                                        w.with_walkers({
+                                                "call": function() { throw has_call }
+                                        }, function(){
+                                                w.walk(expr);
+                                        });
+                                } catch(ex) {
+                                        if (ex === has_call)
+                                                return true;
+                                        throw ex;
+                                }
+                        }) + args ]);
                 },
                 "switch": function(expr, body) {
                         return add_spaces([ "switch", "(" + make(expr) + ")", make_block(body) ]);

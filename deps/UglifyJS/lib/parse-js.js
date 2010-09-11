@@ -590,7 +590,7 @@ function NodeWithToken(str, start, end) {
 
 NodeWithToken.prototype.toString = function() { return this.name; };
 
-function parse($TEXT, strict_semicolons, embed_tokens) {
+function parse($TEXT, strict_mode, embed_tokens) {
 
         var S = {
                 input: tokenizer($TEXT, true),
@@ -653,7 +653,7 @@ function parse($TEXT, strict_semicolons, embed_tokens) {
         function expect(punc) { return expect_token("punc", punc); };
 
         function can_insert_semicolon() {
-                return !strict_semicolons && (
+                return !strict_mode && (
                         S.token.nlb || is("eof") || is("punc", "}")
                 );
         };
@@ -702,8 +702,7 @@ function parse($TEXT, strict_semicolons, embed_tokens) {
                     case "punc":
                         switch (S.token.value) {
                             case "{":
-                                next();
-                                return block();
+                                return as("block", block_());
                             case "[":
                             case "(":
                                 return simple_statement();
@@ -792,7 +791,7 @@ function parse($TEXT, strict_semicolons, embed_tokens) {
         function labeled_statement(label) {
                 S.labels.push(label);
                 var start = S.token, stat = statement();
-                if (!HOP(STATEMENTS_WITH_LABELS, stat[0]))
+                if (strict_mode && !HOP(STATEMENTS_WITH_LABELS, stat[0]))
                         unexpected(start);
                 S.labels.pop();
                 return as("label", label, stat);
@@ -813,14 +812,6 @@ function parse($TEXT, strict_semicolons, embed_tokens) {
                 }
                 semicolon();
                 return as(type, name);
-        };
-
-        function block() {
-                var a = [];
-                while (!is("punc", "}"))
-                        a.push(statement());
-                next();
-                return as("block", a);
         };
 
         function for_() {
@@ -886,8 +877,10 @@ function parse($TEXT, strict_semicolons, embed_tokens) {
         function block_(allow_case) {
                 expect("{");
                 var a = [];
-                while (!is("punc", "}"))
+                while (!is("punc", "}")) {
+                        if (is("eof")) unexpected();
                         a.push(statement(allow_case));
+                }
                 next();
                 return a;
         };
@@ -908,6 +901,8 @@ function parse($TEXT, strict_semicolons, embed_tokens) {
                         next();
                         bfinally = block_();
                 }
+                if (!bcatch && !bfinally)
+                        croak("Missing catch/finally blocks");
                 return as("try", body, bcatch, bfinally);
         };
 
@@ -1000,14 +995,14 @@ function parse($TEXT, strict_semicolons, embed_tokens) {
         };
 
         function array_() {
-                return as("array", expr_list("]", !strict_semicolons));
+                return as("array", expr_list("]", !strict_mode));
         };
 
         function object_() {
                 var first = true, a = [];
                 while (!is("punc", "}")) {
                         if (first) first = false; else expect(",");
-                        if (!strict_semicolons && is("punc", "}"))
+                        if (!strict_mode && is("punc", "}"))
                                 // allow trailing comma
                                 break;
                         var name = as_property_name();

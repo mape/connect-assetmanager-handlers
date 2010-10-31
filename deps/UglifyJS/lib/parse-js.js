@@ -77,8 +77,7 @@ var KEYWORDS = array_to_hash([
         "var",
         "void",
         "while",
-        "with",
-        "NaN"
+        "with"
 ]);
 
 var RESERVED_WORDS = array_to_hash([
@@ -118,22 +117,22 @@ var KEYWORDS_BEFORE_EXPRESSION = array_to_hash([
         "return",
         "new",
         "delete",
-        "throw"
+        "throw",
+        "else"
 ]);
 
 var KEYWORDS_ATOM = array_to_hash([
         "false",
         "null",
         "true",
-        "undefined",
-        "NaN"
+        "undefined"
 ]);
 
 var OPERATOR_CHARS = array_to_hash(characters("+-*&%=<>!?|~^"));
 
 var RE_HEX_NUMBER = /^0x[0-9a-f]+$/i;
 var RE_OCT_NUMBER = /^0[0-7]+$/;
-var RE_DEC_NUMBER = /^\d*\.?\d*(?:e-?\d*(?:\d\.?|\.?\d)\d*)?$/i;
+var RE_DEC_NUMBER = /^\d*\.?\d*(?:e[+-]?\d*(?:\d\.?|\.?\d)\d*)?$/i;
 
 var OPERATORS = array_to_hash([
         "in",
@@ -179,6 +178,7 @@ var OPERATORS = array_to_hash([
         "%=",
         "|=",
         "^=",
+        "&=",
         "&&",
         "||"
 ]);
@@ -248,7 +248,7 @@ var EX_EOF = {};
 function tokenizer($TEXT, skip_comments) {
 
         var S = {
-                text           : $TEXT.replace(/\r\n?|[\n\u2028\u2029]/g, "\n"),
+                text           : $TEXT.replace(/\r\n?|[\n\u2028\u2029]/g, "\n").replace(/^\uFEFF/, ''),
                 pos            : 0,
                 tokpos         : 0,
                 line           : 0,
@@ -340,6 +340,7 @@ function tokenizer($TEXT, skip_comments) {
                                 if (after_e || (i == 0 && !prefix)) return true;
                                 return false;
                         }
+                        if (ch == "+") return after_e;
                         after_e = false;
                         return is_alphanumeric_char(ch) || ch == ".";
                 });
@@ -500,7 +501,9 @@ function tokenizer($TEXT, skip_comments) {
                 }
         };
 
-        function next_token() {
+        function next_token(force_regexp) {
+                if (force_regexp)
+                        return read_regexp();
                 skip_whitespace();
                 start_token();
                 var ch = peek();
@@ -547,7 +550,7 @@ var ASSIGNMENT = (function(a, ret, i){
         }
         return ret;
 })(
-        ["+=", "-=", "/=", "*=", "%=", ">>=", "<<=", ">>>=", "~=", "%=", "|=", "^="],
+        ["+=", "-=", "/=", "*=", "%=", ">>=", "<<=", ">>>=", "~=", "%=", "|=", "^=", "&="],
         { "=": true },
         0
 );
@@ -678,14 +681,18 @@ function parse($TEXT, strict_mode, embed_tokens) {
                 return new NodeWithToken(str, start, end);
         };
 
-        var statement = embed_tokens ? function(allow_case) {
+        var statement = embed_tokens ? function() {
                 var start = S.token;
-                var stmt = $statement(allow_case);
+                var stmt = $statement();
                 stmt[0] = add_tokens(stmt[0], start, prev());
                 return stmt;
         } : $statement;
 
-        function $statement(allow_case) {
+        function $statement() {
+                if (is("operator", "/")) {
+                        S.peeked = null;
+                        S.token = S.input(true); // force regexp
+                }
                 switch (S.token.type) {
                     case "num":
                     case "string":
@@ -721,20 +728,9 @@ function parse($TEXT, strict_mode, embed_tokens) {
                             case "continue":
                                 return break_cont("continue");
 
-                            case "case":
-                                if (!allow_case)
-                                        unexpected();
-                                return as("case", prog1(expression, curry(expect, ":")));
-
                             case "debugger":
                                 semicolon();
                                 return as("debugger");
-
-                            case "default":
-                                if (!allow_case)
-                                        unexpected();
-                                expect(":");
-                                return as("default");
 
                             case "do":
                                 return (function(body){
@@ -762,7 +758,7 @@ function parse($TEXT, strict_mode, embed_tokens) {
                                           : prog1(expression, semicolon));
 
                             case "switch":
-                                return as("switch", parenthesised(), in_loop(curry(block_, true)));
+                                return as("switch", parenthesised(), switch_block_());
 
                             case "throw":
                                 return as("throw", prog1(expression, semicolon));
@@ -802,14 +798,14 @@ function parse($TEXT, strict_mode, embed_tokens) {
         };
 
         function break_cont(type) {
-                if (S.in_loop == 0)
-                        croak(type + " not inside a loop or switch");
                 var name = is("name") ? S.token.value : null;
                 if (name != null) {
                         next();
                         if (!member(name, S.labels))
                                 croak("Label " + name + " without matching loop or statement");
                 }
+                else if (S.in_loop == 0)
+                        croak(type + " not inside a loop or switch");
                 semicolon();
                 return as(type, name);
         };
@@ -859,8 +855,11 @@ function parse($TEXT, strict_mode, embed_tokens) {
                           // body
                           (function(){
                                   ++S.in_function;
+                                  var loop = S.in_loop;
+                                  S.in_loop = 0;
                                   var a = block_();
                                   --S.in_function;
+                                  S.in_loop = loop;
                                   return a;
                           })());
         };
@@ -874,16 +873,42 @@ function parse($TEXT, strict_mode, embed_tokens) {
                 return as("if", cond, body, belse);
         };
 
-        function block_(allow_case) {
+        function block_() {
                 expect("{");
                 var a = [];
                 while (!is("punc", "}")) {
                         if (is("eof")) unexpected();
-                        a.push(statement(allow_case));
+                        a.push(statement());
                 }
                 next();
                 return a;
         };
+
+        var switch_block_ = curry(in_loop, function(){
+                expect("{");
+                var a = [], cur = null;
+                while (!is("punc", "}")) {
+                        if (is("eof")) unexpected();
+                        if (is("keyword", "case")) {
+                                next();
+                                cur = [];
+                                a.push([ expression(), cur ]);
+                                expect(":");
+                        }
+                        else if (is("keyword", "default")) {
+                                next();
+                                expect(":");
+                                cur = [];
+                                a.push([ null, cur ]);
+                        }
+                        else {
+                                if (!cur) unexpected();
+                                cur.push(statement());
+                        }
+                }
+                next();
+                return a;
+        });
 
         function try_() {
                 var body = block_(), bcatch, bfinally;
@@ -1076,32 +1101,33 @@ function parse($TEXT, strict_mode, embed_tokens) {
                 return expr_op(expr_atom(true), 0);
         };
 
-        function maybe_conditional(commas) {
-                if (arguments.length == 0)
-                        commas = true;
+        function maybe_conditional() {
                 var expr = expr_ops();
                 if (is("operator", "?")) {
                         next();
-                        var yes = expression();
+                        var yes = expression(false);
                         expect(":");
-                        return as("conditional", expr, yes, expression(commas));
+                        return as("conditional", expr, yes, expression(false));
                 }
                 return expr;
         };
 
         function is_assignable(expr) {
-                expr = expr[0];
-                return expr == "name" || expr == "dot" || expr == "sub";
+                switch (expr[0]) {
+                    case "dot":
+                    case "sub":
+                        return true;
+                    case "name":
+                        return expr[1] != "this";
+                }
         };
 
-        function maybe_assign(commas) {
-                if (arguments.length == 0)
-                        commas = true;
-                var left = maybe_conditional(commas), val = S.token.value;
+        function maybe_assign() {
+                var left = maybe_conditional(), val = S.token.value;
                 if (is("operator") && HOP(ASSIGNMENT, val)) {
                         if (is_assignable(left)) {
                                 next();
-                                return as("assign", ASSIGNMENT[val], left, maybe_assign(commas));
+                                return as("assign", ASSIGNMENT[val], left, maybe_assign());
                         }
                         croak("Invalid assignment");
                 }
@@ -1111,7 +1137,7 @@ function parse($TEXT, strict_mode, embed_tokens) {
         function expression(commas) {
                 if (arguments.length == 0)
                         commas = true;
-                var expr = maybe_assign(commas);
+                var expr = maybe_assign();
                 if (commas && is("punc", ",")) {
                         next();
                         return as("seq", expr, expression());
@@ -1190,4 +1216,5 @@ exports.KEYWORDS_ATOM = KEYWORDS_ATOM;
 exports.RESERVED_WORDS = RESERVED_WORDS;
 exports.KEYWORDS = KEYWORDS;
 exports.ATOMIC_START_TOKEN = ATOMIC_START_TOKEN;
+exports.OPERATORS = OPERATORS;
 exports.is_alphanumeric_char = is_alphanumeric_char;

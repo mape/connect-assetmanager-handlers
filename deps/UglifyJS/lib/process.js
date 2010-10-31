@@ -55,7 +55,8 @@
 var jsp = require("./parse-js"),
     slice = jsp.slice,
     member = jsp.member,
-    PRECEDENCE = jsp.PRECEDENCE;
+    PRECEDENCE = jsp.PRECEDENCE,
+    OPERATORS = jsp.OPERATORS;
 
 /* -----[ helper for AST traversal ]----- */
 
@@ -108,13 +109,10 @@ function ast_walker(ast) {
                         return [ "new", walk(ctor), args.map(walk) ];
                 },
                 "switch": function(expr, body) {
-                        return [ "switch", walk(expr), body.map(walk) ];
-                },
-                "case": function(expr) {
-                        return [ "case", walk(expr) ];
-                },
-                "default": function() {
-                        return [ "default" ];
+                        return [ "switch", walk(expr), body.map(function(branch){
+                                return [ branch[0] ? walk(branch[0]) : null,
+                                         branch[1].map(walk) ];
+                        }) ];
                 },
                 "break": function(label) {
                         return [ "break", label ];
@@ -418,6 +416,7 @@ function ast_add_scope(ast) {
                         },
                         "for-in": function(has_var, name) {
                                 if (has_var) define(name);
+                                else reference(name);
                         }
                 }, function(){
                         return walk(ast);
@@ -542,8 +541,6 @@ function ast_mangle(ast, do_toplevel) {
 //                         "return": _found,
 //                         "break": _found,
 //                         "continue": _found,
-//                         "case": _found,
-//                         "default": _found,
 //                         "label": _found,
 //                         "function": function(name) {
 //                                 if (name) _found();
@@ -569,9 +566,15 @@ function ast_mangle(ast, do_toplevel) {
      - if (foo) return bar(); else something();  ==> {if(foo)return bar();something()}
    ]----- */
 
+function warn(msg) {
+        require("sys").debug(msg);
+};
+
 function ast_squeeze(ast, options) {
         options = defaults(options, {
-                make_seqs: true
+                make_seqs: true,
+                dead_code: true,
+                no_warnings: false
         });
 
         var w = ast_walker(), walk = w.walk;
@@ -617,28 +620,40 @@ function ast_squeeze(ast, options) {
                                 prev = cur;
                         }
                 }
+                if (options.dead_code) {
+                        var a = [], has_quit = false;
+                        ret2.forEach(function(st){
+                                if (has_quit) {
+                                        if (member(st[0], [ "function", "defun" , "var", "const" ])) {
+                                                a.push(st);
+                                        }
+                                        else if (!options.no_warnings)
+                                                warn("Removing unreachable code: " + gen_code(st, true));
+                                }
+                                else {
+                                        a.push(st);
+                                        if (member(st[0], [ "return", "throw", "break", "continue" ]))
+                                                has_quit = true;
+                                }
+                        });
+                        ret2 = a;
+                }
                 if (!options.make_seqs)
                         return ret2;
                 prev = null;
                 for (var i = 0, ret3 = []; i < ret2.length; ++i) {
                         cur = ret2[i];
                         if (!prev) {
-                                if (cur[0] == "stat") {
-                                        prev = [ "seq", cur[1] ];
-                                        ret3.push([ "stat", prev ]);
-                                } else {
-                                        ret3.push(cur);
-                                }
-                        } else if (cur[0] == "stat") {
-                                prev.push(cur[1]);
-                        } else if (cur[0] == "seq") {
-                                prev.push.apply(prev, slice(cur, 1));
-                        } else {
-                                prev = null;
                                 ret3.push(cur);
+                                if (cur[0] == "stat") prev = cur;
+                        } else if (cur[0] == "stat" && prev[0] == "stat") {
+                                prev[1] = [ "seq", prev[1], cur[1] ];
+                        } else {
+                                ret3.push(cur);
+                                prev = null;
                         }
                 }
-                return ret3.map(walk);
+                return ret3;
         };
 
         function best_of(ast1, ast2) {
@@ -716,7 +731,7 @@ function ast_squeeze(ast, options) {
                                 else {
                                         ret.push(e);
                                 }
-                                ret = [ "block", ret ];
+                                ret = walk([ "block", ret ]);
                         }
                         return ret;
                 },
@@ -724,7 +739,16 @@ function ast_squeeze(ast, options) {
                         return [ "toplevel", tighten(body.map(walk)) ];
                 },
                 "switch": function(expr, body) {
-                        return [ "switch", walk(expr), tighten(body.map(walk)) ];
+                        var last = body.length - 1;
+                        return [ "switch", walk(expr), body.map(function(branch, i){
+                                var block = tighten(branch[1].map(walk));
+                                if (i == last && block.length > 0) {
+                                        var node = block[block.length - 1];
+                                        if (node[0] == "break" && !node[1])
+                                                block.pop();
+                                }
+                                return [ branch[0] ? walk(branch[0]) : null, block ];
+                        }) ];
                 },
                 "function": _lambda,
                 "defun": _lambda,
@@ -742,6 +766,9 @@ function ast_squeeze(ast, options) {
                                     case "*": val = left[1] * right[1]; break;
                                     case "/": val = left[1] / right[1]; break;
                                     case "-": val = left[1] - right[1]; break;
+                                    case "<<": val = left[1] << right[1]; break;
+                                    case ">>": val = left[1] >> right[1]; break;
+                                    case ">>>": val = left[1] >>> right[1]; break;
                                 }
                                 if (val != null) {
                                         best = best_of(best, [ typeof val == "string" ? "string" : "num", val ]);
@@ -750,12 +777,15 @@ function ast_squeeze(ast, options) {
                         return best;
                 },
                 "conditional": function(c, t, e) {
-                        if (c[0] == "unary-prefix" && c[1] == "!")
-                                return [ "conditional", walk(c[2]), walk(e), walk(t) ];
+                        return make_conditional(walk(c), walk(t), walk(e));
                 },
-                "seq": function() {
-                        if (arguments.length == 1)
-                                return walk(arguments[0]);
+                "try": function(t, c, f) {
+                        return [
+                                "try",
+                                tighten(t.map(walk)),
+                                c != null ? [ c[0], tighten(c[1].map(walk)) ] : null,
+                                f != null ? tighten(f.map(walk)) : null
+                        ];
                 }
         }, function() {
                 return walk(ast);
@@ -843,22 +873,50 @@ function gen_code(ast, beautify) {
                 return best_of([ a[0], best_of(a.slice(1)) ]);
         };
 
+        function needs_parens(expr) {
+                if (expr[0] == "function") {
+                        // dot/call on a literal function requires the
+                        // function literal itself to be parenthesized
+                        // only if it's the first "thing" in a
+                        // statement.  This means that the parent is
+                        // "stat", but it could also be a "seq" and
+                        // we're the first in this "seq" and the
+                        // parent is "stat", and so on.  Messy stuff,
+                        // but it worths the trouble.
+                        var a = slice($stack), self = a.pop(), p = a.pop();
+                        while (true) {
+                                if (p[0] == "stat") return true;
+                                if ((p[0] == "seq" && p[1] === self) ||
+                                    (p[0] == "call" && p[1] === self) ||
+                                    (p[0] == "binary" && p[2] === self)) {
+                                        self = p;
+                                        p = a.pop();
+                                } else {
+                                        return false;
+                                }
+                        }
+                }
+                return !HOP(DOT_CALL_NO_PARENS, expr[0]);
+        };
+
+        function make_num(num) {
+                var str = num.toString(10), a = [ str.replace(/^0\./, ".") ], m;
+                if (Math.floor(num) === num) {
+                        a.push("0x" + num.toString(16).toLowerCase(), // probably pointless
+                               "0" + num.toString(8)); // same.
+                        if ((m = /^(.*?)(0+)$/.exec(num))) {
+                                a.push(m[1] + "e" + m[2].length);
+                        }
+                } else if ((m = /^0?\.(0+)(.*)$/.exec(num))) {
+                        a.push(m[2] + "e-" + (m[1].length + 1),
+                               str.substr(str.indexOf(".")));
+                }
+                return best_of(a);
+        };
+
         var generators = {
                 "string": make_string,
-                "num": function(num) {
-                        var str = num.toString(10), a = [ str ], m;
-                        if (Math.floor(num) === num) {
-                                a.push("0x" + num.toString(16).toLowerCase(), // probably pointless
-                                       "0" + num.toString(8)); // same.
-                                if ((m = /^(.*?)(0+)$/.exec(num))) {
-                                        a.push(m[1] + "e" + m[2].length);
-                                }
-                        } else if ((m = /^0?\.(0+)(.*)$/.exec(num))) {
-                                a.push(m[2] + "e-" + (m[1].length + 1),
-                                       str.substr(str.indexOf(".")));
-                        }
-                        return best_of(a);
-                },
+                "num": make_num,
                 "name": make_name,
                 "toplevel": function(statements) {
                         return make_block_statements(statements)
@@ -886,7 +944,8 @@ function gen_code(ast, beautify) {
                                 var w = ast_walker(), has_call = {};
                                 try {
                                         w.with_walkers({
-                                                "call": function() { throw has_call }
+                                                "call": function() { throw has_call },
+                                                "function": function() { return this }
                                         }, function(){
                                                 w.walk(expr);
                                         });
@@ -898,13 +957,7 @@ function gen_code(ast, beautify) {
                         }) + args ]);
                 },
                 "switch": function(expr, body) {
-                        return add_spaces([ "switch", "(" + make(expr) + ")", make_block(body) ]);
-                },
-                "case": function(expr) {
-                        return add_spaces([ "\x08case", make(expr) + ":" ]);
-                },
-                "default": function() {
-                        return "\x08default:";
+                        return add_spaces([ "switch", "(" + make(expr) + ")", make_switch_block(body) ]);
                 },
                 "break": function(label) {
                         var out = "break";
@@ -919,7 +972,7 @@ function gen_code(ast, beautify) {
                         return out + ";";
                 },
                 "conditional": function(co, th, el) {
-                        return add_spaces([ parenthesize(co, "assign", "seq"), "?",
+                        return add_spaces([ parenthesize(co, "assign", "seq", "conditional"), "?",
                                             parenthesize(th, "seq"), ":",
                                             parenthesize(el, "seq") ]);
                 },
@@ -930,7 +983,7 @@ function gen_code(ast, beautify) {
                 },
                 "dot": function(expr) {
                         var out = make(expr), i = 1;
-                        if (!HOP(DOT_CALL_NO_PARENS, expr[0]))
+                        if (needs_parens(expr))
                                 out = "(" + out + ")";
                         while (i < arguments.length)
                                 out += "." + make_name(arguments[i++]);
@@ -938,7 +991,7 @@ function gen_code(ast, beautify) {
                 },
                 "call": function(func, args) {
                         var f = make(func);
-                        if (!HOP(DOT_CALL_NO_PARENS, func[0]))
+                        if (needs_parens(func))
                                 f = "(" + f + ")";
                         return f + "(" + add_commas(args.map(make)) + ")";
                 },
@@ -996,19 +1049,19 @@ function gen_code(ast, beautify) {
                 },
                 "unary-prefix": function(operator, expr) {
                         var val = make(expr);
-                        if (!(HOP(DOT_CALL_NO_PARENS, expr[0]) || expr[0] == "num"))
+                        if (!(expr[0] == "num" || (expr[0] == "unary-prefix" && !HOP(OPERATORS, operator + expr[1])) || !needs_parens(expr)))
                                 val = "(" + val + ")";
                         return operator + (jsp.is_alphanumeric_char(operator.charAt(0)) ? " " : "") + val;
                 },
                 "unary-postfix": function(operator, expr) {
                         var val = make(expr);
-                        if (!(HOP(DOT_CALL_NO_PARENS, expr[0]) || expr[0] == "num"))
+                        if (!(expr[0] == "num" || (expr[0] == "unary-postfix" && !HOP(OPERATORS, operator + expr[1])) || !needs_parens(expr)))
                                 val = "(" + val + ")";
                         return val + operator;
                 },
                 "sub": function(expr, subscript) {
                         var hash = make(expr);
-                        if (!HOP(DOT_CALL_NO_PARENS, expr[0]))
+                        if (needs_parens(expr))
                                 hash = "(" + hash + ")";
                         return hash + "[" + make(subscript) + "]";
                 },
@@ -1018,8 +1071,13 @@ function gen_code(ast, beautify) {
                         return "{" + newline + with_indent(function(){
                                 return props.map(function(p){
                                         var key = p[0], val = make(p[1]);
-                                        if (beautify && beautify.quote_keys || !is_identifier(key))
+                                        if (beautify && beautify.quote_keys) {
                                                 key = make_string(key);
+                                        } else if (typeof key == "number" || !beautify && +key + "" == key) {
+                                                key = make_num(+key);
+                                        } else if (!is_identifier(key)) {
+                                                key = make_string(key);
+                                        }
                                         return indent(add_spaces(beautify && beautify.space_colon
                                                                  ? [ key, ":", val ]
                                                                  : [ key + ":", val ]));
@@ -1125,12 +1183,28 @@ function gen_code(ast, beautify) {
                 return a.map(indent);
         };
 
+        function make_switch_block(body) {
+                var n = body.length;
+                if (n == 0) return "{}";
+                return "{" + newline + body.map(function(branch, i){
+                        var has_body = branch[1].length > 0, code = with_indent(function(){
+                                return indent(branch[0]
+                                              ? add_spaces([ "case", make(branch[0]) + ":" ])
+                                              : "default:");
+                        }, 0.5) + (has_body ? newline + with_indent(function(){
+                                return make_block_statements(branch[1]).join(newline);
+                        }) : "");
+                        if (!beautify && has_body && i < n - 1)
+                                code += ";";
+                        return code;
+                }).join(newline) + newline + indent("}");
+        };
+
         function make_block(statements) {
                 if (!statements) return ";";
                 if (statements.length == 0) return "{}";
                 return "{" + newline + with_indent(function(){
-                        return make_block_statements(statements)
-                                .join(newline);
+                        return make_block_statements(statements).join(newline);
                 }) + newline + indent("}");
         };
 
@@ -1141,23 +1215,20 @@ function gen_code(ast, beautify) {
                 return name;
         };
 
+        var $stack = [];
+
         function make(node) {
                 var type = node[0];
                 var gen = generators[type];
                 if (!gen)
                         throw new Error("Can't find generator for \"" + type + "\"");
-                return gen.apply(type, node.slice(1));
+                $stack.push(node);
+                var ret = gen.apply(type, node.slice(1));
+                $stack.pop(node);
+                return ret;
         };
 
-        var out = make(ast);
-        if (beautify) {
-                var rx = repeat_string(" ", beautify.indent_level / 2) + "\x08";
-                rx = new RegExp(rx, "g");
-                out = out.replace(rx, "");
-        } else {
-                out = out.replace(/\x08/g, "");
-        }
-        return out;
+        return make(ast);
 };
 
 /* -----[ Utilities ]----- */
@@ -1182,10 +1253,11 @@ function defaults(args, defs) {
 };
 
 function is_identifier(name) {
-        return /^[a-z_$][a-z0-9_$]*$/i.test(name) &&
-                !HOP(jsp.KEYWORDS_ATOM, name) &&
-                !HOP(jsp.RESERVED_WORDS, name) &&
-                !HOP(jsp.KEYWORDS, name);
+        return /^[a-z_$][a-z0-9_$]*$/i.test(name)
+                && name != "this"
+                && !HOP(jsp.KEYWORDS_ATOM, name)
+                && !HOP(jsp.RESERVED_WORDS, name)
+                && !HOP(jsp.KEYWORDS, name);
 };
 
 function HOP(obj, prop) {

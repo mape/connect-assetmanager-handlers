@@ -20,16 +20,31 @@ Via [npm](http://github.com/isaacs/npm):
                 , 'client.css'
             ]
             , 'preManipulate': {
-                , '^': [
-                    assetHandler.yuiCssOptimize
-                    , assetHandler.fixVendorPrefixes
+                '^': [
+                    assetHandler.fixVendorPrefixes
                     , assetHandler.fixGradients
                     , assetHandler.replaceImageRefToBase64(root)
                 ]
             }
         }
+        'js': {
+            'route': /\/static\/js\/[0-9]+\/.*\.js/
+            , 'path': './public/js/'
+            , 'dataType': 'javascript'
+            , 'files': [
+                'jquery.js'
+                , 'jquery.client.js'
+            ]
+            , 'postManipulate': {
+                '^': [
+                    assetHandler.uglifyJsOptimize
+                ]
+            }
+        }
     });
 ## Handlers
+### uglifyJsOptimize
+Uses UglifyJS to compress the give javascript files.
 ### yuiJsOptimize
 Uses YUI Compressor to compress the given javascript files.
 ### yuiCssOptimize

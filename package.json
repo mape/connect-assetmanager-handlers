@@ -8,6 +8,8 @@
   "main" : "./lib/handlers",
   "repository" : { "type":"git", "url":"http://github.com/mape/connect-assetmanager-handlers.git" },
   "dependencies" : {
+    "cssmin": ">=0.3.1",
+    "csso": ">=1.2.12",
     "request" : ">=0.9.5",
     "step" : ">=0.0.3",
     "uglify-js" : ">=0.0.1"

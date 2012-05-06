@@ -49,6 +49,8 @@ Uses UglifyJS to compress the give javascript files.
 Uses YUI Compressor to compress the given javascript files.
 ### yuiCssOptimize
 Uses YUI Compressor to compress the given CSS files.
+### cssoOptimize
+Uses csso Compressor to compress the given CSS files.
 ### fixVendorPrefixes
 Replaces -vendor with multiple versions of the same line for most vendor prefixes.
 

@@ -35,6 +35,11 @@ Via [npm](http://github.com/isaacs/npm):
                 'jquery.js'
                 , 'jquery.client.js'
             ]
+            , 'preManipulate': {
+                '^': [
+                    assetHandler.snockets
+                ]
+            }
             , 'postManipulate': {
                 '^': [
                     assetHandler.uglifyJsOptimize
@@ -45,6 +50,8 @@ Via [npm](http://github.com/isaacs/npm):
 ## Handlers
 ### uglifyJsOptimize
 Uses UglifyJS to compress the give javascript files.
+### snockets
+Uses Sprockets/Snockets-style comments to indicate javascript dependencies using //= require dependency and //= require_tree dir
 ### yuiJsOptimize
 Uses YUI Compressor to compress the given javascript files.
 ### yuiCssOptimize

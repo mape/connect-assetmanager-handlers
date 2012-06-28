@@ -87,3 +87,13 @@ Simply replaces `data-url` with `url`. Used as a complement with replaceImageRef
 
 ### fixFloatDoubleMargin
 Finds all blocks containing floats and add a display: inline; (unless there is another display set in that block) to fix double margin bugs. 
+
+### replaceCSSImageURLs
+Finds all relative CSS image URLs, and replaces them to be absolute. THis ensures that there are no broken image references, even if loading images to the asset manager from different directories.
+
+Arguments:
+
+ * **Root** - The root directory of your server. Not the public folder, but your server.
+ 
+#### Setup
+    assetHandler.replaceCSSImageURLs(root)

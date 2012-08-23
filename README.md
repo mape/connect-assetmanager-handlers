@@ -1,3 +1,4 @@
+[![build status](https://secure.travis-ci.org/mape/connect-assetmanager-handlers.png)](http://travis-ci.org/mape/connect-assetmanager-handlers)
 # connect-assetmanager-handlers
 
 Post and pre hooks for [connect-assetmanager](http://github.com/mape/connect-assetmanager)
